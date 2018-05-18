@@ -1,0 +1,216 @@
+---
+title: "Final Project"
+output: html_document
+---
+# Testing Correllation Between Starting Position with Production and Victor in a Game of Settlers of Catan
+
+## Overview
+
+In the video games industry, the relationship between a game's score and how well it does seems like it should be linked, but is it really? And if it is, what does the link look like? As the title suggests, in this analysis, we will be looking at statistics about video games released and rated between 2000 and 2016. We will be performing a basic linear regression analysis to determine if we can predict a game's sales in North America based on attributes of that game.
+
+## Libraries
+The libraries you'll need to replicate this are as follows:
+
+* tidyverse
+* broom
+* tree
+
+
+## Datasets
+Here are the data sets we will be using in our analysis:
+
+* Video Game Sales: https://www.kaggle.com/gregorut/videogamesales
+* Video Game Ratings: https://www.kaggle.com/egrinstein/20-years-of-games
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(tree)
+```
+
+## Getting started
+
+First we'll load the data:
+
+game_sales is a dataset of video game sale statitsics from 1980 to 2016. It has information about a game's platform, genre, release year, publisher, and sales in North America, Japan, the EU, and globally.
+```{r load sales data,message=FALSE}
+game_sales <- read_csv("C:/Users/Emery/Documents/Programming/Datasets/VideoGames/video-game-sales/vgsales.csv")
+game_sales %>% head()
+```
+
+
+game_ratings is a dataset of video game rating statistics scraped from ign.com from 1996 to 2016. It contains information about a game's platform, genre, release year, release month, and release day.
+```{r load ratings,message=FALSE}
+game_ratings <- read_csv("C:/Users/Emery/Documents/Programming/Datasets/VideoGames/20-years-of-games/ign.csv")
+game_ratings %>% head()
+```
+
+
+## Tidying the data
+
+Now that we have the data loaded nicely into dataframes, we want to make sure it is as neat as possible, so we don't run into any issues later on. Our intermediate goal is to combine these two dataframes seamlessly into one. To do this, we'll need to be able to match a game on both tables by its name and what platform it was released on.
+
+The first thing we're going to do is make sure the platforms in both tables are represented the same way. The platforms in game_ratings seem to be written out, while those in game_sales are abbreviated. Not to mention they might not even have all the same consoles. Let's start by testing how many different values each "platform" column has. We can do this by converting the column to a factor and running it through "levels()", which lists out the unique levels from a factor.
+First the game_ratings set:
+```{r factor plats ratings}
+levels(as.factor(game_ratings$platform))
+```
+
+
+And then the game_sales set:
+```{r factor plats sales}
+levels(as.factor(game_sales$Platform))
+```
+
+
+Obviously there were a lot fewer levels in the sales set, so there are fewer types of consoles listed. We'll be ignoring games on platforms that aren't common to both, since the data won't be complete unless we do. However for the consoles that are common to both, we'll want to make sure they're catalogued the same way. To start, we'll write a function to convert all the written-out names into the abbreviations as they appear in game_sales.
+```{r renaming function}
+rename_plat <- function(platform) {
+  ifelse(platform == "Nintendo 3DS", "3DS",
+         ifelse(platform == "Dreamcast", "DC",
+         ifelse(platform == "Nintendo DS", "DS",
+         ifelse(platform == "Game Boy", "GB",
+         ifelse(platform == "Game Boy Advance", "GBA",
+         ifelse(platform == "GameCube", "GC",
+         ifelse(platform == "Nintendo 64", "N64",
+         ifelse(platform == "PC", "PC",
+         ifelse(platform == "PlayStation", "PS",
+         ifelse(platform == "PlayStation 2", "PS2",
+         ifelse(platform == "PlayStation 3", "PS3",
+         ifelse(platform == "PlayStation 4", "PS4",
+         ifelse(platform == "PlayStation Portable", "PSP",
+         ifelse(platform == "PlayStation Vita", "PSV",
+         ifelse(platform == "Wii", "Wii",
+         ifelse(platform == "Wii U", "WiiU",
+         ifelse(platform == "WonderSwan", "WS",
+         ifelse(platform == "Xbox 360", "X360",
+         ifelse(platform == "Xbox", "XB",
+         ifelse(platform == "Xbox One", "XOne",
+         platform))))))))))))))))))))
+}
+```
+
+
+Before we put the function to use, let's tidy up game_sales. We only want data from 2000-2016, and we don't want any data that shows up as "N/A". We can also see from when we first loaded that the Year column had type chr, so we'll want to convert that to int. Finally we might want to rename certain columns either for convenience or so that the name matches with the other set.
+```{r tidy sales}
+tidy_sales <- game_sales %>%
+  filter(Year >= 2000 & Year <= 2016 & Year!="N/A") %>%
+  type_convert(cols(Year=col_integer())) %>%
+  arrange(Year) %>%
+  rename(name=Name, year=Year,platform=Platform)
+
+tidy_sales %>% head()
+```
+
+
+Now that we have the sales nice and tidy, let's move on to the ratings. The parameters are more or less the same, 2000-2016 and not NA. In addition, we want to limit the set to just games on platforms that appeared in the sales dataset. Once we do that, we can rename the platform column to platform_names, and create a new platform column that passes the platform_names column into our rename_plat function. By doing this, we create a platform column in the same format as the one in the sales dataset. We'll also rename the "title" column to "name" and the "release_year" column to simply "year". This is mostly for convenience when we join.
+```{r tidy ratings}
+tidy_ratings <- game_ratings %>%
+  filter(release_year >= 2000 & !is.na(release_year)) %>%
+  filter(platform %in% c("Nintendo 3DS","Dreamcast","Nintendo DS","Game Boy",
+                         "Game Boy Advance","GameCube","Nintendo 64","PC",
+                         "PlayStation","PlayStation 2","PlayStation 3",
+                         "PlayStation 4","PlayStation Portable","PlayStation Vita",
+                         "Wii","Wii U","WonderSwan","Xbox 360","Xbox","Xbox One")) %>%
+  rename(platform_name=platform,name=title, year=release_year) %>%
+  mutate(platform=rename_plat(platform_name)) %>%
+  arrange(year)
+
+tidy_ratings %>% head()
+```
+
+
+After all that, we can now join the tables. We don't want any games that don't appear in both tables, so we'll use an inner join. We'll join the two tables on a game's name, what platform it was released on (since games can come out on multiple platforms), and its year of release. Since we made sure the three attributes in question had the same names in both columns, we can simply give the names of the columns to join on. We'll also remove a few unnecessary columns from the joined set, and standardize the column that we will use as a dependent variable, NA_Sales.
+```{r join game data}
+joined_set <- tidy_ratings %>% 
+  inner_join(tidy_sales, by=c("name","platform","year")) %>% 
+  select(-genre,-X1,-url) %>%
+  mutate(z_NA_Sales=scale(NA_Sales))
+joined_set %>% head()
+```
+
+
+## Analyzing the data
+Now we have a working dataset, we should start looking at various attributes that might be related to sales in some way.
+
+We can start out by plotting scores over time. We'll group by genre, since trends are often seen in specific genres rather than in video games as a whole.
+```{r plot scores}
+joined_set %>%
+  group_by(Genre) %>%
+  ggplot(aes(x=year, y=score, color=Genre)) + 
+    geom_smooth() +
+    labs(title="Game scores over time by genre",x="Year",y="Score",subtitle="2008 was not a good year for anything")
+```
+
+
+Now we'll plot sales over time, once again separating the plots by genre.
+```{r plot sales}
+joined_set %>%
+  group_by(Genre) %>%
+  ggplot(aes(x=year, y=z_NA_Sales, color=Genre)) + 
+    geom_smooth() +
+    labs(title="Game sales over time by genre",x="Year",y="Sales")
+```
+
+Already we can see trends beginning to emerge. For example, the rise of RPG games over the last 10 years compared to the relatively steady shooter genre. We've also shown that sales are not independent with year, and so we will need to include year in our regression.
+
+
+
+Finally we ought to plot how sales are affected by genre. If they do, we'll want to factor them into our regression as well. We have a really large spread so we'll plot the sales data logarithmically.
+```{r plot genre sales}
+joined_set %>%
+  ggplot(aes(x=Genre,y=ifelse(z_NA_Sales >= 0, log(z_NA_Sales), -log(-z_NA_Sales)))) +
+    geom_violin() +
+    labs(title="Game Sales by Genre (2000-2016)",x="Genre",y="Sales (North America)") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+It looks like genre does affect sales; different genres seem to have different distributions of sales numbers, some more than others.
+
+
+One last thing before we set up our regression. It's possible that our score column and genre column interact. We'll want to check this using something like a violin plot.
+```{r check interaction}
+joined_set %>%
+  ggplot(aes(x=Genre,y=score)) +
+    geom_violin() +
+    labs(title="Video Game Scores by Genre (2000-2016)",x="Genre",y="Score") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+As suspected, the distribution of scores across genres isn't identical, we'll have to account for that when we construct our linear model.
+
+
+
+## Constructing a Linear Model
+
+The next step is to begin the regression. We want to check for a correlation between the score a game recieves and its overall sales. We'll also need to factor in the effect genre has, and the effect that the interaction between genre and score has. So going in, our Null Hypothesis will be that the score, genre, and release year of a game have no effect on a game's sales in North America. We construct the linear model as follows:
+```{r construct linmod}
+linmod_score_genre <- lm(z_NA_Sales~score+year+factor(Genre)+(score*factor(Genre)), data=joined_set)
+linmod_score_genre %>% tidy()
+```
+
+
+## Regression Analysis
+
+Now that we have the model, we need to evaluate it. First, we'll produce plots 
+```{r plot residuals}
+plot(linmod_score_genre)
+```
+
+
+And now we call summary() to display some final statistics before we evaluate the model.
+```{r test model}
+linmod_score_genre %>% 
+  summary()
+```
+
+
+### Discussion
+
+It looks like the model does not fit the data well. 
+Before we get into this, however, let's first look at what the model seems does accomplish. The t-values of score and year suggest that they are in fact good predictors of sales. Because of this, we reject the null hypothesis that none of the predictors have an effect on sales.
+
+However, as a whole, the model is not well-fitted to the data. We can see this first in our plot of residuals vs fitted values: the axes seem to be linearly dependent in some way, and so we are in violation of the IID assumption, referring to Independent and Identically Distributed variables. Our residuals should have no relationship between the x axis and the distribution on the y axis. Furthermore, our Multiple R-squared test yields 0.07248. In an ideal linear model, this R-squared test would be as close to 1 as possible, with 1 being a perfect fit. Our R-squared being this close to 0 (and far from 1) means that the model is likely not a good fit. The R-squared test is not definitive in this sense, but it in combination with the results from our residuals should lead us to suspect the model is ill-fitting.
+
+While this model did not produce a good fit, it does show that there is a significant link between not just score and sales but year and sales. In the future, perhaps a different model would work better. One thing to address, for example, is the skew of video game scores towards the higher range, as reviewers are loathe to give games low numbers. With this in mind, another expirement could be designed to fit score to sales in such a way that reflects that skew.
