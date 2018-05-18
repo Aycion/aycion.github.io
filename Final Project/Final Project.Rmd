@@ -1,8 +1,8 @@
 ---
-title: "Final Project"
+title: "Constructing a Linear Model to Test how a Reviewer's Score of a Video Game Affects Sales"
 output: html_document
+author: "Emery Bacon"
 ---
-# Testing Correllation Between Starting Position with Production and Victor in a Game of Settlers of Catan
 
 ## Overview
 
